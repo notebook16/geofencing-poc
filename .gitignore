@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.Python
+.env
+*.xlsx
+!.gitkeep
+.DS_Store
+output/
+*.log
