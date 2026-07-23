@@ -10,9 +10,11 @@ Flow (same Redis pattern as heyev-backend getFleetSum):
            -> loan_applications.installation_id
            -> loan_applications.center_id / centers
              (center lat/long = centers.geo_location_lat / geo_location_lng)
-  2. MGET Redis keys by IMEI and parse latitude/longitude
+  2. MGET Redis keys by IMEI and parse latitude/longitude,
+     valid_location, and numeric_io_data.number_of_satellites
      (same JSON shape as fleetsumm mapRedisToIotRaw).
-  3. Write XLSX with battery number, imei, device lat/long, and center fields.
+  3. Write XLSX with battery number, imei, device lat/long,
+     valid_location, number_of_satellites, and center fields.
 """
 
 from __future__ import annotations
@@ -74,6 +76,8 @@ class BatteryRow:
     center_long: Optional[float]
     lat: Optional[float] = None
     lon: Optional[float] = None
+    valid_location: Optional[bool] = None
+    number_of_satellites: Optional[int] = None
 
 
 def env(name: str, default: Optional[str] = None) -> str:
@@ -205,6 +209,46 @@ def parse_float(value: Any) -> Optional[float]:
     return None
 
 
+def parse_bool(value: Any) -> Optional[bool]:
+    """Same rule as fleetsumm parseBoolValue."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        trimmed = value.strip().lower()
+        if trimmed in ("true", "1", "yes", "y"):
+            return True
+        if trimmed in ("false", "0", "no", "n"):
+            return False
+    return None
+
+
+def parse_int(value: Any) -> Optional[int]:
+    """Same rule as fleetsumm parseInt64Value."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            return None
+        return int(value)
+    if isinstance(value, str):
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        try:
+            return int(float(trimmed))
+        except ValueError:
+            return None
+    return None
+
+
 def fits_decimal_10_6(v: float) -> bool:
     # DECIMAL(10,6) => abs < 10000
     return abs(v) < 10_000
@@ -225,15 +269,24 @@ def normalize_coordinate(v: float, is_latitude: bool) -> Optional[float]:
     return None
 
 
-def extract_lat_lon(raw: Any) -> tuple[Optional[float], Optional[float]]:
-    """Mirror fleetsumm mapRedisToIotRaw lat/lon extraction."""
+@dataclass
+class RedisTelemetry:
+    lat: Optional[float] = None
+    lon: Optional[float] = None
+    valid_location: Optional[bool] = None
+    number_of_satellites: Optional[int] = None
+
+
+def extract_telemetry(raw: Any) -> RedisTelemetry:
+    """Mirror fleetsumm mapRedisToIotRaw lat/lon/valid_location/satellites extraction."""
+    empty = RedisTelemetry()
     if isinstance(raw, str):
         try:
             raw = json.loads(raw)
         except json.JSONDecodeError:
-            return None, None
+            return empty
     if not isinstance(raw, dict):
-        return None, None
+        return empty
 
     telemetry = resolve_telemetry_root(raw)
     numeric_io = resolve_numeric_io_map(raw)
@@ -245,24 +298,30 @@ def extract_lat_lon(raw: Any) -> tuple[Optional[float], Optional[float]]:
         lat = normalize_coordinate(lat, True)
     if lon is not None:
         lon = normalize_coordinate(lon, False)
-    return lat, lon
+
+    return RedisTelemetry(
+        lat=lat,
+        lon=lon,
+        valid_location=parse_bool(telemetry.get("valid_location")),
+        number_of_satellites=parse_int(numeric_io.get("number_of_satellites")),
+    )
 
 
-def fetch_coords_from_redis(
+def fetch_telemetry_from_redis(
     client: redis.Redis, imeis: list[str], batch_size: int
-) -> dict[str, tuple[Optional[float], Optional[float]]]:
+) -> dict[str, RedisTelemetry]:
     """Same pattern as utils/redis FetchBulkByIMEI: MGET with IMEI as key."""
-    coords: dict[str, tuple[Optional[float], Optional[float]]] = {}
+    out: dict[str, RedisTelemetry] = {}
     unique = list(dict.fromkeys(imeis))
 
     for batch in batched(unique, batch_size):
         values = client.mget(batch)
         for imei, raw in zip(batch, values):
             if raw is None:
-                coords[imei] = (None, None)
+                out[imei] = RedisTelemetry()
                 continue
-            coords[imei] = extract_lat_lon(raw)
-    return coords
+            out[imei] = extract_telemetry(raw)
+    return out
 
 
 def write_xlsx(path: Path, rows: list[BatteryRow]) -> None:
@@ -276,6 +335,8 @@ def write_xlsx(path: Path, rows: list[BatteryRow]) -> None:
             "imei",
             "lat",
             "long",
+            "valid_location",
+            "number_of_satellites",
             "center_id",
             "center_name",
             "center_lat",
@@ -290,6 +351,8 @@ def write_xlsx(path: Path, rows: list[BatteryRow]) -> None:
                 r.imei,
                 r.lat,
                 r.lon,
+                r.valid_location,
+                r.number_of_satellites,
                 r.center_id,
                 r.center_name,
                 r.center_lat,
@@ -318,8 +381,8 @@ def main() -> int:
     rclient = connect_redis()
     rclient.ping()
 
-    print(f"Fetching lat/long from Redis in batches of {batch_size}...")
-    coords = fetch_coords_from_redis(rclient, imeis, batch_size)
+    print(f"Fetching telemetry from Redis in batches of {batch_size}...")
+    telemetry = fetch_telemetry_from_redis(rclient, imeis, batch_size)
 
     with_coords = 0
     with_center = 0
@@ -328,9 +391,12 @@ def main() -> int:
             with_center += 1
         if not row.imei:
             continue
-        lat, lon = coords.get(row.imei, (None, None))
-        row.lat, row.lon = lat, lon
-        if lat is not None and lon is not None:
+        t = telemetry.get(row.imei, RedisTelemetry())
+        row.lat = t.lat
+        row.lon = t.lon
+        row.valid_location = t.valid_location
+        row.number_of_satellites = t.number_of_satellites
+        if t.lat is not None and t.lon is not None:
             with_coords += 1
 
     write_xlsx(output, rows)
