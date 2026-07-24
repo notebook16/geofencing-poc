@@ -1,0 +1,9 @@
+{
+  "key_path": "~/.ssh/your-key.pem",
+  "user": "ubuntu",
+  "host": "ec2-xx-xx-xx-xx.compute.amazonaws.com",
+  "remote_dir": "/home/ubuntu/redis-data-downloader",
+  "service_name": "redis-data-downloader",
+  "port": "8080",
+  "systemd_user": "ubuntu"
+}
