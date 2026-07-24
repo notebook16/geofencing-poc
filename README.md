@@ -68,16 +68,36 @@ Open `http://127.0.0.1:8080`.
 4. Download XLSX (`data` + `run_info` sheets) named `{username}_{timestamp}.xlsx`
 5. Run history shows username and start time
 
-## Deploy (EC2, one systemd service)
+## Deploy on EC2 (clone → env → systemd)
+
+On the server:
 
 ```bash
+git clone <your-repo-url> redis-data-downloader
+cd redis-data-downloader
+
+cp .env.example .env
+# edit .env: APP_PASSWORD, APP_JWT_SECRET, DB_POSTGRES_*, REDIS_*
+
+# optional: override port / service user
 cp deploy/deploy-config.example.json deploy/deploy-config.json
-# edit host, key_path, remote_dir, port
+# edit port / systemd_user if needed
+
 chmod +x deploy/deploy.sh
 ./deploy/deploy.sh
 ```
 
-The script builds the frontend (`nvm use 20`), rsyncs backend + `frontend/dist`, creates a venv on the server, installs the systemd unit, and restarts the service.
+Requires on the instance: Python 3, Node via **nvm** (script runs `nvm use 20`), and sudo for systemd.
+
+The script builds the frontend, creates `.venv`, installs deps, installs/enables `redis-data-downloader.service`, and restarts it. App listens on `0.0.0.0:8080` by default (open the security group).
+
+Re-deploy after `git pull`:
+
+```bash
+cd redis-data-downloader
+git pull
+./deploy/deploy.sh
+```
 
 ## Env vars
 
@@ -88,4 +108,4 @@ The script builds the frontend (`nvm use 20`), rsyncs backend + `frontend/dist`,
 | `DB_POSTGRES_*` | Same as heyev-backend getFleetSum |
 | `REDIS_URL` / `REDIS_PASS` | Redis `host:port` |
 | `REDIS_BATCH_SIZE` | Optional (default 50) |
-| `OUTPUT_DIR` | Optional; default `../output` from project root |
+| `OUTPUT_DIR` | Optional; systemd sets this to `<repo>/output` |
