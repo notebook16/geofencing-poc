@@ -87,7 +87,7 @@ chmod +x deploy/deploy.sh
 ./deploy/deploy.sh
 ```
 
-Requires on the instance: Python 3, Node via **nvm** (script runs `nvm use 20`), and sudo for systemd.
+Requires on the instance: Python 3, sudo for systemd. If `node`/`npm` are missing, the script installs **Node.js 20** via NodeSource (no nvm).
 
 The script builds the frontend, creates `.venv`, installs deps, installs/enables `redis-data-downloader.service`, and restarts it. App listens on `0.0.0.0:8080` by default (open the security group).
 

@@ -18,6 +18,22 @@ parse_json() {
     | head -1 | cut -d'"' -f4 || true
 }
 
+ensure_node() {
+  if command -v npm >/dev/null 2>&1 && command -v node >/dev/null 2>&1; then
+    echo "    node $(node -v) / npm $(npm -v)"
+    return 0
+  fi
+
+  echo "==> Installing Node.js 20 (system packages, no nvm)"
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo apt-get install -y curl ca-certificates
+  fi
+  curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+  sudo apt-get install -y nodejs
+  echo "    node $(node -v) / npm $(npm -v)"
+}
+
 SERVICE_NAME=$(parse_json "service_name")
 APP_PORT=$(parse_json "port")
 SYSTEMD_USER=$(parse_json "systemd_user")
@@ -35,15 +51,8 @@ fi
 
 mkdir -p "$ROOT/output"
 
-echo "==> Building frontend (nvm use 20)"
-export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
-# shellcheck disable=SC1091
-if [[ -s "$NVM_DIR/nvm.sh" ]]; then
-  . "$NVM_DIR/nvm.sh"
-  nvm use 20
-else
-  echo "Warning: nvm not found; using system node ($(node -v 2>/dev/null || echo missing))"
-fi
+echo "==> Building frontend"
+ensure_node
 
 cd "$ROOT/frontend"
 if [[ -f package-lock.json ]]; then
