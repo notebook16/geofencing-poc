@@ -87,7 +87,7 @@ chmod +x deploy/deploy.sh
 ./deploy/deploy.sh
 ```
 
-Requires on the instance: Python **3.11–3.13** (script prefers 3.12; installs it if only 3.14+ is present), sudo for systemd. If `node`/`npm` are missing, the script installs **Node.js 20** via NodeSource (no nvm).
+Requires on the instance: sudo for systemd. If `node`/`npm` are missing, installs **Node.js 20**. For Python: uses 3.11–3.13 if present, else tries `python3.13` via apt, else installs **uv** and provisions **Python 3.12** (needed on Ubuntu 26.04 / Resolute where system `python3` is 3.14 and breaks pydantic).
 
 The script builds the frontend, creates `.venv`, installs deps, installs/enables `redis-data-downloader.service`, and restarts it. App listens on `0.0.0.0:8080` by default (open the security group).
 

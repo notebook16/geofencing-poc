@@ -34,51 +34,70 @@ ensure_node() {
   echo "    node $(node -v) / npm $(npm -v)"
 }
 
-# Prefer 3.12/3.13/3.11 — system python3 may be 3.14, which breaks pydantic-core wheels.
-resolve_python() {
+ensure_uv() {
+  export PATH="${HOME}/.local/bin:${PATH}"
+  if command -v uv >/dev/null 2>&1; then
+    return 0
+  fi
+  echo "==> Installing uv (to provision Python 3.12)"
+  if ! command -v curl >/dev/null 2>&1; then
+    sudo apt-get update -y
+    sudo apt-get install -y curl ca-certificates
+  fi
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="${HOME}/.local/bin:${PATH}"
+  command -v uv >/dev/null 2>&1
+}
+
+# Drop venvs built with Python >= 3.14 (pydantic-core / PyO3 break there).
+drop_incompatible_venv() {
+  if [[ ! -d "$ROOT/.venv" ]]; then
+    return 0
+  fi
+  local vpy="$ROOT/.venv/bin/python"
+  if [[ ! -x "$vpy" ]]; then
+    rm -rf "$ROOT/.venv"
+    return 0
+  fi
+  local major minor
+  major="$("$vpy" -c 'import sys; print(sys.version_info.major)')"
+  minor="$("$vpy" -c 'import sys; print(sys.version_info.minor)')"
+  if [[ "$major" -gt 3 || ( "$major" -eq 3 && "$minor" -ge 14 ) ]]; then
+    echo "    removing incompatible .venv (Python ${major}.${minor})"
+    rm -rf "$ROOT/.venv"
+  fi
+}
+
+# Ubuntu Resolute (26.04) only ships 3.14; deadsnakes may have 3.13 but not 3.12.
+# Prefer any 3.11–3.13 on PATH, else try apt 3.13, else uv-managed 3.12.
+ensure_python_venv() {
+  drop_incompatible_venv
+
   local candidate
-  for candidate in python3.12 python3.13 python3.11; do
+  for candidate in python3.13 python3.12 python3.11; do
     if command -v "$candidate" >/dev/null 2>&1; then
-      printf '%s\n' "$candidate"
+      echo "    using $($candidate --version)"
+      if [[ ! -d "$ROOT/.venv" ]]; then
+        "$candidate" -m venv "$ROOT/.venv"
+      fi
       return 0
     fi
   done
 
-  echo "==> Installing Python 3.12 (pydantic does not support 3.14 yet)" >&2
-  sudo apt-get update -y >&2
-  if ! sudo apt-get install -y python3.12 python3.12-venv python3.12-dev >&2; then
-    sudo apt-get install -y software-properties-common >&2
-    sudo add-apt-repository -y ppa:deadsnakes/ppa >&2
-    sudo apt-get update -y >&2
-    sudo apt-get install -y python3.12 python3.12-venv python3.12-dev >&2
-  fi
-  printf '%s\n' "python3.12"
-}
-
-ensure_python_venv() {
-  local py
-  py="$(resolve_python)"
-  echo "    using $($py --version)"
-
-  # Drop a broken venv created with unsupported Python (e.g. 3.14)
-  if [[ -d "$ROOT/.venv" ]]; then
-    local vpy="$ROOT/.venv/bin/python"
-    if [[ -x "$vpy" ]]; then
-      local major minor
-      major="$("$vpy" -c 'import sys; print(sys.version_info.major)')"
-      minor="$("$vpy" -c 'import sys; print(sys.version_info.minor)')"
-      if [[ "$major" -gt 3 || ( "$major" -eq 3 && "$minor" -ge 14 ) ]]; then
-        echo "    removing incompatible .venv (Python ${major}.${minor})"
-        rm -rf "$ROOT/.venv"
-      fi
-    else
-      rm -rf "$ROOT/.venv"
-    fi
+  echo "==> Trying apt python3.13 (deadsnakes / distro)"
+  sudo apt-get update -y >&2 || true
+  if sudo apt-get install -y python3.13 python3.13-venv python3.13-dev >&2; then
+    echo "    using $(python3.13 --version)"
+    python3.13 -m venv "$ROOT/.venv"
+    return 0
   fi
 
-  if [[ ! -d "$ROOT/.venv" ]]; then
-    "$py" -m venv "$ROOT/.venv"
-  fi
+  echo "==> Falling back to uv-managed Python 3.12"
+  ensure_uv
+  uv python install 3.12
+  rm -rf "$ROOT/.venv"
+  uv venv --python 3.12 "$ROOT/.venv"
+  echo "    using $($ROOT/.venv/bin/python --version)"
 }
 
 SERVICE_NAME=$(parse_json "service_name")
