@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import Clarity from '@microsoft/clarity'
 import {
   clearSession,
   exportData,
@@ -41,6 +42,7 @@ function LoginView({ onSuccess }) {
     try {
       const data = await login(username.trim(), password)
       setSession(data.access_token, data.username)
+      Clarity.identify(data.username, undefined, undefined, data.username)
       onSuccess(data.username)
     } catch (err) {
       setError(err.message || 'Login failed')
@@ -294,6 +296,12 @@ function ExportView({ username, onLogout }) {
 
 export default function App() {
   const [username, setUsername] = useState(() => (getToken() ? getUsername() : null))
+
+  useEffect(() => {
+    if (username) {
+      Clarity.identify(username, undefined, undefined, username)
+    }
+  }, [username])
 
   function handleLogout() {
     clearSession()
